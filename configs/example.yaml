@@ -1,0 +1,51 @@
+# 360 Crowd Mosh example config
+#
+# Assumes stitched/equirectangular 360 video: width is 360 degrees, height is -90..+90 pitch.
+# ignored_rects are normalized [x, y, width, height] in that flattened equirectangular image.
+
+output_width: 1280
+output_height: 720
+# output_fps: 25
+
+# Number of directions to scan around the room.
+scan_sectors: 24
+
+# Slightly downward often works better for dancefloor footage.
+scan_pitch_degrees: -6.0
+scan_fov_degrees: 58.0
+scan_width: 256
+scan_height: 144
+
+# Output view. Smaller FOV = more zoomed-in.
+output_fov_degrees: 72.0
+min_fov_degrees: 42.0
+max_fov_degrees: 95.0
+zoom_from_motion: true
+
+# Target timing. For 25 fps, 50..175 frames is roughly 2..7 seconds.
+hold_frames_min: 50
+hold_frames_max: 175
+smoothing: 0.045
+top_candidate_count: 6
+hard_cut_probability: 0.03
+random_seed: 7
+
+# Dim/strobe footage tuning.
+motion_threshold: 10.0
+brightness_floor: 8
+contrast_boost: true
+motion_decay: 0.82
+
+# Clamp target pitch so it avoids ceiling/floor obsession.
+pitch_min_degrees: -25.0
+pitch_max_degrees: 18.0
+
+# Add projection walls, screens, DJ laptop, mirrors etc here.
+# Example masks below are placeholders. Tune them using a still from your actual footage.
+ignored_rects:
+  # Top strip: ceiling/lights. x, y, w, h.
+  - [0.0, 0.0, 1.0, 0.18]
+  # Bottom strip: floor/tripod/dead zone.
+  - [0.0, 0.88, 1.0, 0.12]
+  # Example projector/screen region. Disable or move this.
+  # - [0.62, 0.28, 0.12, 0.28]
