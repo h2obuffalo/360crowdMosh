@@ -1,0 +1,11 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+renders/
+input/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.log
