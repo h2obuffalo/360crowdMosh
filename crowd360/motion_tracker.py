@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Sequence
 
 import cv2
 import numpy as np
@@ -80,19 +80,20 @@ class MotionCrowdDirector:
 
     def _scan_candidates(self, frame_bgr: np.ndarray) -> List[Target]:
         candidates: List[Target] = []
+        scan_pitch = float(self.config.scan_pitch_degrees)
         for sector_idx in range(int(self.config.scan_sectors)):
             yaw = -180.0 + (360.0 * sector_idx / float(self.config.scan_sectors))
             yaw = wrap_degrees(yaw)
             crop = equirectangular_to_perspective(
                 frame_bgr,
                 yaw_degrees=yaw,
-                pitch_degrees=float(self.config.scan_pitch_degrees),
+                pitch_degrees=scan_pitch,
                 fov_degrees=float(self.config.scan_fov_degrees),
                 out_width=int(self.config.scan_width),
                 out_height=int(self.config.scan_height),
             )
             score = self._motion_score(sector_idx, crop)
-            score *= self._mask_penalty_for_yaw(yaw, self.config.ignored_rects)
+            score *= self._mask_penalty_for_view_center(yaw, scan_pitch, self.config.ignored_rects)
 
             # Dim footage can produce noisy false positives. Decay but retain
             # recent motion so a single strobe frame does not fully dominate.
@@ -110,7 +111,7 @@ class MotionCrowdDirector:
                     fov = self.config.max_fov_degrees + (
                         self.config.min_fov_degrees - self.config.max_fov_degrees
                     ) * zoom_strength
-                candidates.append(Target(yaw, float(self.config.scan_pitch_degrees), fov, combined_score))
+                candidates.append(Target(yaw, scan_pitch, fov, combined_score))
         return candidates
 
     def _motion_score(self, sector_idx: int, crop_bgr: np.ndarray) -> float:
@@ -130,7 +131,7 @@ class MotionCrowdDirector:
 
         diff = cv2.absdiff(gray, prev)
         _, thresh = cv2.threshold(diff, int(self.config.motion_threshold), 255, cv2.THRESH_BINARY)
-        # Morph close reduces isolated compression/noise speckles.
+        # Morph open reduces isolated compression/noise speckles.
         kernel = np.ones((3, 3), np.uint8)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         motion_pixels = float(np.count_nonzero(thresh))
@@ -150,18 +151,22 @@ class MotionCrowdDirector:
         return self.rng.choices(shortlist, weights=weights, k=1)[0]
 
     @staticmethod
-    def _mask_penalty_for_yaw(yaw: float, rects: Sequence[Rect]) -> float:
-        """Return 0..1 penalty for ignored rects near this yaw.
+    def _mask_penalty_for_view_center(yaw: float, pitch: float, rects: Sequence[Rect]) -> float:
+        """Return 0..1 penalty for ignored rects containing this view centre.
 
-        Rects are normalized in equirectangular coordinates. This version uses a
-        simple yaw overlap test; a later mask-paint UI can make this more exact.
+        Rects are normalized equirectangular coordinates: x 0..1 maps yaw
+        -180..180, y 0..1 maps pitch +90..-90. This centre-point test is simple
+        but avoids suppressing every yaw just because there is a top/bottom mask.
+        A later mask-paint UI can make this more exact by testing the full crop.
         """
         if not rects:
             return 1.0
         x_norm = ((yaw + 180.0) % 360.0) / 360.0
+        y_norm = (90.0 - pitch) / 180.0
         penalty = 1.0
-        for x, _y, w, _h in rects:
+        for x, y, w, h in rects:
             x2 = x + w
-            if x <= x_norm <= x2:
+            y2 = y + h
+            if x <= x_norm <= x2 and y <= y_norm <= y2:
                 penalty *= 0.05
         return penalty
