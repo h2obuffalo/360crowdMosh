@@ -1,148 +1,89 @@
 #!/usr/bin/env python3
-"""Offline/virtual-camera 360 crowd director prototype.
-
-Example:
-    python scripts/offline_director.py \
-        --input input/test_360.mp4 \
-        --output renders/test_reframe.mp4 \
-        --config configs/example.yaml \
-        --preview
-"""
-
+"""Run the crowd director on a file, capture device, or OpenCV stream."""
 from __future__ import annotations
-
-import argparse
-import os
-import sys
+import argparse, logging, sys
 from pathlib import Path
-from typing import Optional
-
+from typing import Any
 import cv2
-import numpy as np
-
-# Allow running from repo root without installing as a package.
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
+ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 from crowd360.config import load_config
-from crowd360.motion_tracker import MotionCrowdDirector
+from crowd360.diagnostics import render_diagnostics
+from crowd360.director import MotionCrowdDirector
+from crowd360.geometry import detect_input_mode
+from crowd360.output import TimestampResampler
+from crowd360.rendering import FlatCropRenderer
+from crowd360.sources import open_frame_source
+LOG=logging.getLogger("crowd360")
 
+def arguments(argv=None):
+ p=argparse.ArgumentParser(description="Motion-directed 16:9 output from flat or stitched 360 video")
+ p.add_argument("--input",required=True,help="File, OpenCV URL, or device index such as 0")
+ p.add_argument("--input-mode",choices=("auto","equirectangular","flat"))
+ p.add_argument("--output"); p.add_argument("--output-fps",type=float)
+ p.add_argument("--config",default="configs/example.yaml")
+ p.add_argument("--flat-aspect-mode",choices=("crop","letterbox"))
+ p.add_argument("--capture-width",type=int); p.add_argument("--capture-height",type=int)
+ p.add_argument("--capture-fps",type=float); p.add_argument("--capture-warmup-seconds",type=float,default=0)
+ p.add_argument("--preview",action="store_true"); p.add_argument("--diagnostics",action="store_true")
+ p.add_argument("--virtualcam",action="store_true"); p.add_argument("--max-frames",type=int,default=0)
+ p.add_argument("--start-frame",type=int,default=0); p.add_argument("--log-level",default="INFO")
+ return p.parse_args(argv)
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Auto-reframe stitched 360 footage toward active crowd motion.")
-    parser.add_argument("--input", required=True, help="Input stitched/equirectangular 360 video path or stream URL.")
-    parser.add_argument("--output", help="Optional output video path. Omit if only using --virtualcam.")
-    parser.add_argument("--config", default="configs/example.yaml", help="YAML config path.")
-    parser.add_argument("--preview", action="store_true", help="Show live preview windows.")
-    parser.add_argument("--virtualcam", action="store_true", help="Send reframed frames to the first available virtual camera.")
-    parser.add_argument("--max-frames", type=int, default=0, help="Optional limit for testing. 0 means no limit.")
-    parser.add_argument("--start-frame", type=int, default=0, help="Seek to frame before processing.")
-    return parser.parse_args()
+def writer(path,fps,w,h):
+ if not path:return None
+ target=Path(path); target.parent.mkdir(parents=True,exist_ok=True)
+ out=cv2.VideoWriter(str(target),cv2.VideoWriter_fourcc(*"mp4v"),fps,(w,h))
+ if not out.isOpened(): raise RuntimeError(f"Could not open output writer: {path}")
+ return out
 
+def virtualcam(enabled,w,h,fps)->Any|None:
+ if not enabled:return None
+ try: import pyvirtualcam
+ except ImportError as exc: raise RuntimeError("Install the project live extra for --virtualcam") from exc
+ return pyvirtualcam.Camera(width=w,height=h,fps=fps)
 
-def open_writer(path: Optional[str], fps: float, width: int, height: int) -> Optional[cv2.VideoWriter]:
-    if not path:
-        return None
-    out_path = Path(path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(out_path), fourcc, fps, (width, height))
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open output writer: {path}")
-    return writer
-
-
-def open_virtualcam(enabled: bool, width: int, height: int, fps: float):
-    if not enabled:
-        return None
-    try:
-        import pyvirtualcam
-    except ImportError as exc:
-        raise RuntimeError("pyvirtualcam is not installed. Run: pip install -r requirements.txt") from exc
-
-    return pyvirtualcam.Camera(width=width, height=height, fps=fps)
-
-
-def main() -> int:
-    args = parse_args()
-    cfg = load_config(args.config)
-
-    cap = cv2.VideoCapture(args.input)
-    if not cap.isOpened():
-        print(f"ERROR: Could not open input: {args.input}", file=sys.stderr)
-        return 2
-
-    input_fps = cap.get(cv2.CAP_PROP_FPS)
-    fps = float(cfg.output_fps or input_fps or 25.0)
-    if fps <= 1.0 or fps > 240.0:
-        fps = 25.0
-
-    if args.start_frame > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, args.start_frame)
-
-    director = MotionCrowdDirector(cfg)
-    writer = open_writer(args.output, fps, int(cfg.output_width), int(cfg.output_height))
-    cam = open_virtualcam(args.virtualcam, int(cfg.output_width), int(cfg.output_height), fps)
-
-    if cam is not None:
-        print(f"Using virtual camera: {cam.device}")
-
-    frame_idx = 0
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-
-            target = director.update(frame)
-            output = director.render_output(frame)
-
-            if writer is not None:
-                writer.write(output)
-
-            if cam is not None:
-                # pyvirtualcam expects RGB.
-                cam.send(cv2.cvtColor(output, cv2.COLOR_BGR2RGB))
-                cam.sleep_until_next_frame()
-
-            if args.preview:
-                preview = output.copy()
-                cv2.putText(
-                    preview,
-                    f"yaw={target.yaw:6.1f} pitch={target.pitch:5.1f} fov={target.fov:5.1f} score={target.score:5.2f}",
-                    (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.imshow("360 Crowd Mosh - reframed", preview)
-                key = cv2.waitKey(1) & 0xFF
-                if key in (27, ord("q")):
-                    break
-
-            frame_idx += 1
-            if args.max_frames and frame_idx >= args.max_frames:
-                break
-
-            if frame_idx % 100 == 0:
-                print(f"processed {frame_idx} frames")
-    finally:
-        cap.release()
-        if writer is not None:
-            writer.release()
-        if cam is not None:
-            cam.close()
-        if args.preview:
-            cv2.destroyAllWindows()
-
-    print(f"done: processed {frame_idx} frames")
-    if args.output:
-        print(f"wrote: {args.output}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+def main(argv=None):
+ a=arguments(argv); logging.basicConfig(level=getattr(logging,a.log_level.upper()),format="%(levelname)s %(name)s: %(message)s")
+ try:
+  c=load_config(a.config)
+  if a.input_mode:c.input_mode=a.input_mode
+  if a.flat_aspect_mode:c.flat_aspect_mode=a.flat_aspect_mode
+  if a.output_fps:c.output_fps=a.output_fps
+  c.validate()
+  source=open_frame_source(a.input,capture_width=a.capture_width,capture_height=a.capture_height,capture_fps=a.capture_fps,start_frame=a.start_frame,warmup_seconds=a.capture_warmup_seconds)
+ except (RuntimeError,ValueError) as exc: LOG.error("%s",exc); return 2
+ out=cam=None; processed=written=0; last_output=last_timestamp=None
+ try:
+  packet=source.read()
+  if packet is None: raise RuntimeError("Input opened but produced no frame")
+  h,w=packet.frame.shape[:2]; mode=detect_input_mode(w,h,c.input_mode)
+  LOG.info("Input geometry: %s (requested=%s, frame=%dx%d)",mode,c.input_mode,w,h)
+  fps=float(c.output_fps or source.info.reported_fps or 25); fps=fps if 1<=fps<=240 else 25
+  out=writer(a.output,fps,c.output_width,c.output_height); cam=virtualcam(a.virtualcam,c.output_width,c.output_height,fps)
+  director=MotionCrowdDirector(c,mode); resampler=TimestampResampler(fps) if c.output_fps else None
+  while packet is not None:
+   result=director.update(packet.frame,packet.source_timestamp,1/source.info.reported_fps)
+   last_output,last_timestamp=result.output,packet.source_timestamp
+   count=resampler.emit_count(packet.source_timestamp) if resampler else 1
+   if out:
+    for _ in range(count): out.write(result.output); written+=1
+   if cam: cam.send(cv2.cvtColor(result.output,cv2.COLOR_BGR2RGB)); cam.sleep_until_next_frame()
+   if a.diagnostics:
+    crop=director.renderer.last_crop if isinstance(director.renderer,FlatCropRenderer) else None
+    cv2.imshow("Crowd camera diagnostics",render_diagnostics(packet.frame,result,c,mode,source.info,crop=crop,output_fps=fps))
+   elif a.preview: cv2.imshow("Crowd camera output",result.output)
+   if (a.preview or a.diagnostics) and cv2.waitKey(1)&0xff in (27,ord("q")): break
+   processed+=1
+   if a.max_frames and processed>=a.max_frames: break
+   packet=source.read()
+  if out and resampler and last_output is not None and last_timestamp is not None:
+   for _ in range(resampler.flush_count(last_timestamp+1/source.info.reported_fps)): out.write(last_output); written+=1
+  LOG.info("Done: processed=%d, wrote=%d",processed,written); return 0
+ except (RuntimeError,ValueError) as exc: LOG.error("%s",exc); return 2
+ finally:
+  source.close()
+  if out: out.release()
+  if cam: cam.close()
+  if a.preview or a.diagnostics: cv2.destroyAllWindows()
+if __name__=="__main__": raise SystemExit(main())
