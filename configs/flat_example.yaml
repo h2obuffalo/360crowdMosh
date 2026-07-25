@@ -1,4 +1,4 @@
-input_mode: auto
+input_mode: flat
 flat_aspect_mode: crop
 output_width: 1280
 output_height: 720
@@ -8,12 +8,12 @@ analysis_fps: 10
 target_evaluation_fps: 5
 motion_decay_seconds: 1.5
 motion_threshold: 12
-brightness_floor: 8
-contrast_boost: true
 minimum_motion_region_fraction: 0.0007
 global_flash_fraction: 0.55
 global_flash_confidence_scale: 0.12
 global_flash_recovery_seconds: 0.6
+candidate_columns: 8
+candidate_rows: 4
 minimum_activity_score: 1.5
 current_shot_bias: 0.20
 hysteresis: 0.12
@@ -23,11 +23,21 @@ target_cooldown_seconds: 5.0
 hold_seconds_min: 2.0
 hold_seconds_max: 7.0
 minimum_target_movement: 0.05
-no_motion_behavior: hold
+no_motion_behavior: home
 smoothing_time_seconds: 0.6
 movement_deadband: 0.012
 zoom_deadband: 0.01
 zoom_change_per_second: 0.8
+medium_activity_score: 4.0
+close_activity_score: 10.0
+flat_home_center_x: 0.5
+flat_home_center_y: 0.5
+flat_wide_crop_width_fraction: 1.0
+flat_medium_crop_width_fraction: 0.72
+flat_close_crop_width_fraction: 0.50
+flat_min_crop_width_fraction: 0.50
+flat_max_pan_normalized_per_second: 0.40
+flat_max_tilt_normalized_per_second: 0.30
 ignored_rects:
-  - [0.0, 0.0, 1.0, 0.16]
+  - [0.0, 0.0, 1.0, 0.12]
   - [0.0, 0.90, 1.0, 0.10]
