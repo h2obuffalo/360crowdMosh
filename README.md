@@ -1,152 +1,102 @@
 # 360 Crowd Mosh
 
-Prototype tool for turning stitched 360 footage into an auto-reframed live/recorded feed for Mosh-Pro.
+A focused motion-directed virtual camera for Mosh-Pro. It accepts stitched equirectangular 360° footage or normal flat video from a USB webcam, capture card, file, or OpenCV-compatible stream, and produces a normal configurable output frame (1280×720 by default).
 
-The goal is not to make a full VJ app. The goal is to make a small "virtual camera operator" that watches a 360 audience/crowd feed, avoids obvious bad zones such as ceiling/projector walls, chooses active crowd regions, and outputs a normal 16:9 video feed that Mosh-Pro can treat as a file or webcam.
+The project deliberately does not add person detection, identity tracking, a VJ interface, or a video server.
 
-## Project concept
+## Input geometry
 
-```text
-Insta360 ONE X2 / ONE R / stitched 360 file
-        -> equirectangular 360 video frame
-        -> motion scan + optional person detection later
-        -> random/smoothed audience target selection
-        -> normal reframed 16:9 crop
-        -> video file or virtual webcam
-        -> Mosh-Pro webcam/file input
-        -> data mosh / optical flow / MIDI / BPM / export
-```
+`--input-mode` and `input_mode` accept `auto`, `equirectangular`, and `flat`. Auto detection uses actual frame dimensions: frames close to 2:1 are treated as likely stitched equirectangular footage; common 16:9, 4:3, and similar frames are flat. Explicit CLI selection overrides configuration and detection.
 
-The first prototype is deliberately offline-first because you already have dim stitched footage. Once that works, live input can be swapped in via RTMP/OBS/capture.
+The runtime is split into `FrameSource`, `ActivityAnalyser`, `TargetSelector`, geometry-specific `CameraController`, and geometry-specific `OutputRenderer` components. Activity is analysed once in normalized source coordinates, independently of target changes.
 
-## Current status
+### Flat sources
 
-This repo contains a first-draft Python prototype:
+Flat frames never enter spherical projection. The virtual camera moves an aspect-correct crop using normalized centre X/Y and crop-width fraction. Pan and tilt are digital cropping, not physical movement. Zoom reduces source coverage and may require upscaling. A 1080p webcam has limited reframing room when output is also 1080p; 4K provides materially more digital pan/zoom freedom. `flat_min_crop_width_fraction` defaults to `0.5`.
 
-- reads a stitched/equirectangular 360 video file;
-- scans multiple yaw sectors around the audience band;
-- scores regions by motion energy;
-- ignores configurable no-track zones;
-- randomly chooses among active regions;
-- smooths yaw/pitch/FOV toward the chosen target;
-- writes a normal reframed output video;
-- can optionally send frames to a virtual webcam if `pyvirtualcam` and OBS virtual camera are set up.
+`flat_aspect_mode: crop` fills the output without stretching. `letterbox` preserves the selected source aspect and adds bars.
 
-It does **not** yet do true person detection. That is intentional. For dim dancefloor footage, motion-directed reframing is the best first test before adding YOLO/person tracking.
+### Equirectangular sources
 
-## Platform recommendation
+The source heatmap is analysed once. Masks, candidates, and targets may cross the longitude seam. The selected view is rendered once through the perspective projector, with shortest-path yaw movement and configured pitch/FOV limits.
 
-Start on the MacBook.
+## Installation
 
-Reasons:
-
-- Mosh-Pro supports macOS and Windows.
-- OBS Studio has a macOS virtual camera.
-- `pyvirtualcam` supports macOS through OBS virtual camera.
-- Offline video processing avoids the harder Insta360 live-stream/capture problem at first.
-
-Use Windows later if:
-
-- the MacBook struggles with performance;
-- OBS virtual camera routing into Mosh-Pro is unreliable;
-- you want Spout-based workflows, GPU-heavy YOLO, or Resolume-style routing.
-
-## Quick start: offline render
+Supported Python: 3.10–3.13.
 
 ```bash
-git clone https://github.com/h2obuffalo/360crowdMosh.git
-cd 360crowdMosh
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-
-python scripts/offline_director.py \
-  --input /path/to/stitched_360_video.mp4 \
-  --output renders/crowd_reframe_test.mp4 \
-  --config configs/example.yaml \
-  --preview
+pip install -e '.[live,dev]'
 ```
 
-The output file can then be loaded into Mosh-Pro as normal video input.
+## Commands
 
-## Quick start: virtual webcam test
-
-One-time macOS setup:
-
-1. Install OBS Studio.
-2. Open OBS.
-3. Click **Start Virtual Camera** once.
-4. Click **Stop Virtual Camera**.
-5. Close OBS.
-
-Then run:
+Standard 1080p webcam (numeric input is a device index, not a filename):
 
 ```bash
-source .venv/bin/activate
 python scripts/offline_director.py \
-  --input /path/to/stitched_360_video.mp4 \
-  --config configs/example.yaml \
-  --virtualcam \
-  --preview
+  --input 0 --input-mode flat \
+  --capture-width 1920 --capture-height 1080 --capture-fps 30 \
+  --virtualcam --preview
 ```
 
-Then in Mosh-Pro, choose the OBS virtual camera as a webcam input.
+Flat video file:
 
-Important: OBS virtual camera is usually a single shared virtual camera. If Python is writing to it, do not also expect OBS to read it and output the same virtual camera again. For the first test, send Python directly to Mosh-Pro.
-
-## Manual setup checklist
-
-See:
-
-- [Mac setup](docs/SETUP_MAC.md)
-- [Windows setup](docs/SETUP_WINDOWS.md)
-- [Prototype roadmap](docs/ROADMAP.md)
-
-## Tracking strategy
-
-The first tracker does this:
-
-1. Divide the 360 image into virtual looking directions.
-2. Render each direction as a small normal perspective crop.
-3. Measure frame-to-frame motion energy.
-4. Penalize masked/excluded areas.
-5. Pick randomly from the top active sectors.
-6. Smooth the camera view toward the target.
-
-This is better than raw person detection for version 1 because dim footage, strobe lighting, projections, and datapath feedback may confuse object detectors. Motion plus masks should be enough to prove the idea.
-
-## Avoiding ceilings, projectors, and meta-feedback
-
-The config file supports:
-
-- audience pitch band;
-- ignored equirectangular rectangles;
-- target hold time;
-- smoothness;
-- FOV/zoom;
-- hard-cut probability.
-
-For projections/screens, add mask rectangles in `configs/example.yaml` so they do not dominate the motion score.
-
-## Later live path
-
-```text
-Insta360 phone app live 360 stream
-        -> local RTMP server / OBS / ffmpeg input
-        -> this app reads stream URL
-        -> auto-reframed virtual camera
-        -> Mosh-Pro
+```bash
+python scripts/offline_director.py \
+  --input input/crowd_camera.mp4 --input-mode flat \
+  --output renders/flat_directed.mp4 \
+  --config configs/flat_example.yaml --diagnostics
 ```
 
-Likely next pieces:
+Stitched 360° file:
 
-- local RTMP ingest notes;
-- mask painting UI;
-- MIDI/OSC controls;
-- YOLO person detector pass;
-- TouchDesigner/OBS routing recipes;
-- NDI/Syphon/Spout alternatives.
+```bash
+python scripts/offline_director.py \
+  --input input/crowd_360.mp4 --input-mode equirectangular \
+  --output renders/reframe_360.mp4 \
+  --config configs/equirectangular_example.yaml --diagnostics
+```
 
-## Safety/privacy note
+The original file command remains valid; ordinary 2:1 footage is normally auto-detected:
 
-This is designed for abstracting the crowd into visual material, but it is still camera-based audience capture. For real events, use signage/consent appropriate to the venue/project, and avoid storing identifiable footage unless everyone involved has agreed.
+```bash
+python scripts/offline_director.py \
+  --input input/test_360.mp4 \
+  --output renders/reframe_test.mp4 \
+  --config configs/example.yaml --preview
+```
+
+## Activity, masks, and directing
+
+Analysis runs at `analysis_fps` on a smaller image while output renders from the original frame. The analyser removes median global brightness shift, filters small connected components, applies ignored rectangles directly to motion pixels, and decays activity using elapsed seconds. A configurable global-flash detector temporarily lowers confidence after strobes.
+
+Masks are normalized `[x, y, width, height]`. In equirectangular mode `x + width > 1` wraps across the seam.
+
+Target selection uses minimum confidence, current-shot bias, hysteresis, switch margin, travel penalty, cooldown, minimum/maximum shot duration, and minimum meaningful movement. `no_motion_behavior` accepts `hold`, `home`, and `slow_roam`; stable `hold` is the default.
+
+Camera motion uses elapsed time, speed limits, smoothing, deadbands, smooth arrival, separate position/zoom control, and optional hard cuts.
+
+## Diagnostics and FPS
+
+`--diagnostics` displays source, masks, candidates and scores, heatmap, selected crop or approximate 360 viewport, target reason/confidence, flash warning, source/analysis/output rates, processing time, skipped analysis frames, dropped live frames, and source state.
+
+Source FPS is preserved by default. When `--output-fps` is set, file output is resampled from source timestamps so duration remains correct. Live inputs retain only the latest frame to prevent latency queues.
+
+Capture width/height/FPS requests are best-effort; actual values are logged with warnings when a device does not accept them.
+
+## Migration
+
+Legacy frame-count hold settings and common old FOV/motion-decay keys are migrated with deprecation warnings where conversion is unambiguous. Old perspective-sector scan settings are ignored with warnings because analysis no longer renders multiple views.
+
+## Tests and performance
+
+```bash
+pytest -q
+python -m compileall -q crowd360 scripts tests
+ruff check .
+mypy crowd360
+```
+
+Tests use synthetic frames and require no physical camera. For an 8 GB M1 MacBook Pro, start near 320×180 analysis at 8–12 FPS; lower analysis rate before output rate. No neural-network or GPU dependency is introduced.

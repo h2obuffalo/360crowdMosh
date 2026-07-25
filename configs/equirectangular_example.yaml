@@ -1,19 +1,18 @@
-input_mode: auto
-flat_aspect_mode: crop
+input_mode: equirectangular
 output_width: 1280
 output_height: 720
-analysis_width: 320
-analysis_height: 180
+analysis_width: 384
+analysis_height: 192
 analysis_fps: 10
 target_evaluation_fps: 5
 motion_decay_seconds: 1.5
 motion_threshold: 12
-brightness_floor: 8
-contrast_boost: true
 minimum_motion_region_fraction: 0.0007
 global_flash_fraction: 0.55
 global_flash_confidence_scale: 0.12
 global_flash_recovery_seconds: 0.6
+candidate_columns: 12
+candidate_rows: 4
 minimum_activity_score: 1.5
 current_shot_bias: 0.20
 hysteresis: 0.12
@@ -28,6 +27,20 @@ smoothing_time_seconds: 0.6
 movement_deadband: 0.012
 zoom_deadband: 0.01
 zoom_change_per_second: 0.8
+medium_activity_score: 4.0
+close_activity_score: 10.0
+equirectangular_home_yaw_degrees: 0.0
+equirectangular_home_pitch_degrees: -5.0
+equirectangular_home_fov_degrees: 72.0
+equirectangular_wide_fov_degrees: 92.0
+equirectangular_medium_fov_degrees: 68.0
+equirectangular_close_fov_degrees: 48.0
+equirectangular_min_fov_degrees: 42.0
+equirectangular_max_fov_degrees: 95.0
+pitch_min_degrees: -25.0
+pitch_max_degrees: 18.0
+equirectangular_max_pan_degrees_per_second: 100.0
+equirectangular_max_pitch_degrees_per_second: 50.0
 ignored_rects:
   - [0.0, 0.0, 1.0, 0.16]
   - [0.0, 0.90, 1.0, 0.10]
